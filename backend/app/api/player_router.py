@@ -10,7 +10,10 @@ router = APIRouter()
 
 @router.get("/players/search", response_model=List[Player])
 def search_players(q: str, format: str = "all", db: Session = Depends(get_db)):
-    players = db.query(DBPlayer).filter(DBPlayer.name.ilike(f"%{q}%")).limit(10).all()
+    terms = q.strip().split()
+    search_term = terms[-1] if terms else q
+    players = db.query(DBPlayer).filter(DBPlayer.name.ilike(f"%{search_term}%")).limit(20).all()
+    # To improve accuracy, if they typed first name we could try to rank them, but this is good enough for MVP
     return [
         Player(
             id=p.id, name=p.name, team=p.team, role=p.role,
