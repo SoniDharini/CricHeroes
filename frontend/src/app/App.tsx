@@ -1,0 +1,33 @@
+import { useState } from 'react';
+import { ThemeProvider } from './context/ThemeContext';
+import { LandingPage } from './components/LandingPage';
+import { Dashboard } from './components/Dashboard';
+import { PlayerImpactAnalyzer } from './components/PlayerImpactAnalyzer';
+import { LiveMatchTacticalAnalyzer } from './components/LiveMatchTacticalAnalyzer';
+
+type Page = 'landing' | 'dashboard' | 'impact-analyzer' | 'tactical-analyzer';
+
+export default function App() {
+  const [currentPage, setCurrentPage] = useState<Page>('landing');
+  
+  const renderPage = () => {
+    switch (currentPage) {
+      case 'landing':
+        return <LandingPage onNavigate={setCurrentPage} />;
+      case 'dashboard':
+        return <Dashboard onNavigate={setCurrentPage} onBack={() => setCurrentPage('landing')} />;
+      case 'impact-analyzer':
+        return <PlayerImpactAnalyzer onBack={() => setCurrentPage('dashboard')} />;
+      case 'tactical-analyzer':
+        return <LiveMatchTacticalAnalyzer onBack={() => setCurrentPage('dashboard')} />;
+      default:
+        return <LandingPage onNavigate={setCurrentPage} />;
+    }
+  };
+  
+  return (
+    <ThemeProvider>
+      <div className="min-h-screen">{renderPage()}</div>
+    </ThemeProvider>
+  );
+}
