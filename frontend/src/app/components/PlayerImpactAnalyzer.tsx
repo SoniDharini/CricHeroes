@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { motion } from 'motion/react';
 import { Search, TrendingUp, BarChart3, Activity, AlertCircle, Loader2 } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Cell } from 'recharts';
@@ -6,15 +6,14 @@ import { Button } from './ui/button';
 import { Card } from './ui/card';
 import { Input } from './ui/input';
 import { Label } from './ui/label';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { ImpactMeter } from './ImpactMeter';
 import { Navigation } from './Navigation';
 import { ChartTooltip } from './ChartTooltip';
 import {
-  searchPlayers,
-  analyzePlayerImpact,
-  AnalyzeImpactResponse,
-  Player
+  getPlayerImpact,
+  getPlayers,
+  PlayerImpactResponse,
+  Player,
 } from '../services/playerImpactApi';
 
 interface PlayerImpactAnalyzerProps {
@@ -25,17 +24,15 @@ export function PlayerImpactAnalyzer({ onBack }: PlayerImpactAnalyzerProps) {
   const [selectedPlayer, setSelectedPlayer] = useState<Player | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [filteredPlayers, setFilteredPlayers] = useState<Player[]>([]);
-  const [inningsWindow, setInningsWindow] = useState('10');
-  const [matchFormat, setMatchFormat] = useState('all');
-
   const [showResults, setShowResults] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [analysisResult, setAnalysisResult] = useState<AnalyzeImpactResponse | null>(null);
+  const [analysisResult, setAnalysisResult] = useState<PlayerImpactResponse | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     const fetchPlayers = async () => {
       if (searchTerm.length >= 2) {
-        const results = await searchPlayers(searchTerm);
+        const results = await getPlayers(searchTerm);
         setFilteredPlayers(results);
       } else {
         setFilteredPlayers([]);
@@ -49,28 +46,37 @@ export function PlayerImpactAnalyzer({ onBack }: PlayerImpactAnalyzerProps) {
     if (selectedPlayer) {
       setLoading(true);
       setShowResults(true);
-      const result = await analyzePlayerImpact({
-        playerId: selectedPlayer.id,
-        inningsWindow: parseInt(inningsWindow),
-        format: matchFormat,
-        weightingType: 'exponential'
-      });
+      setError(null);
+      const result = await getPlayerImpact(selectedPlayer.player_id);
       setAnalysisResult(result);
+      if (!result) {
+        setError('Impact data could not be loaded for this player.');
+      }
       setLoading(false);
     }
   };
 
-  const trendData = analysisResult?.inningsData.map((innings, index) => ({
-    name: `M${index + 1}`,
-    score: innings.impactScore,
+  const trendData = analysisResult?.last_10_innings.map((innings, index) => ({
+    name: `I${index + 1}`,
+    score: innings.innings_impact,
     date: innings.date,
+    opposition: innings.opposition,
   })) || [];
 
-  const breakdownData = analysisResult ? [
-    { name: 'Performance', value: analysisResult.performanceContribution, color: '#16a34a' },
-    { name: 'Context', value: analysisResult.contextContribution, color: '#059669' },
-    { name: 'Pressure', value: analysisResult.pressureContribution, color: '#10b981' },
-  ] : [];
+  const breakdownData = useMemo(() => {
+    if (!analysisResult || analysisResult.last_10_innings.length === 0) {
+      return [];
+    }
+    const innings = analysisResult.last_10_innings;
+    const average = (values: number[]) =>
+      values.reduce((sum, value) => sum + value, 0) / values.length;
+    return [
+      { name: 'Batting Impact', value: average(innings.map((point) => point.batting_impact)), color: '#16a34a' },
+      { name: 'Bowling Impact', value: average(innings.map((point) => point.bowling_impact)), color: '#059669' },
+      { name: 'Context Mult.', value: average(innings.map((point) => point.context_multiplier)) * 20, color: '#10b981' },
+      { name: 'Situation Mult.', value: average(innings.map((point) => point.situation_multiplier)) * 20, color: '#0f766e' },
+    ];
+  }, [analysisResult]);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-green-50 via-white to-green-50 dark:from-slate-950 dark:via-green-950 dark:to-slate-900">
@@ -84,13 +90,13 @@ export function PlayerImpactAnalyzer({ onBack }: PlayerImpactAnalyzerProps) {
             </div>
             <h1 className="text-4xl text-gray-900 dark:text-white">Player Impact Metric Analyzer</h1>
           </div>
-          <p className="text-gray-600 dark:text-slate-400">Calculate comprehensive impact scores with performance, context, and pressure analysis</p>
+          <p className="text-gray-600 dark:text-slate-400">A context-aware 0-100 metric that estimates how much a player changes match outcome probability under pressure</p>
         </motion.div>
 
         <div className="grid lg:grid-cols-3 gap-6">
           <motion.div initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.1 }} className="lg:col-span-1">
             <Card className="bg-white dark:bg-slate-800 border-gray-200 dark:border-slate-700 p-6 shadow-lg dark:shadow-2xl sticky top-20">
-              <h2 className="text-xl text-gray-900 dark:text-white mb-6">Analysis Configuration</h2>
+              <h2 className="text-xl text-gray-900 dark:text-white mb-6">Player Selector</h2>
 
               <div className="space-y-6">
                 <div>
@@ -116,10 +122,11 @@ export function PlayerImpactAnalyzer({ onBack }: PlayerImpactAnalyzerProps) {
                             setFilteredPlayers([]);
                             setShowResults(false);
                             setAnalysisResult(null);
+                            setError(null);
                           }}
                           className="w-full text-left px-4 py-3 hover:bg-gray-100 dark:hover:bg-slate-700/50 transition-colors text-gray-900 dark:text-white border-b border-gray-100 dark:border-slate-700/50 last:border-0"
                         >
-                          <div className="font-medium">{player.name}</div>
+                          <div className="font-medium">{player.player_name}</div>
                           <div className="text-sm text-gray-600 dark:text-slate-400">{player.team} • {player.role}</div>
                         </button>
                       ))}
@@ -129,40 +136,17 @@ export function PlayerImpactAnalyzer({ onBack }: PlayerImpactAnalyzerProps) {
 
                 {selectedPlayer && (
                   <div className="p-4 bg-green-500/10 dark:bg-green-500/20 border border-green-500/30 dark:border-green-500/30 rounded-lg">
-                    <div className="text-gray-900 dark:text-white mb-1 font-medium">{selectedPlayer.name}</div>
+                    <div className="text-gray-900 dark:text-white mb-1 font-medium">{selectedPlayer.player_name}</div>
                     <div className="text-sm text-gray-600 dark:text-slate-400">{selectedPlayer.team}</div>
                     <div className="text-sm text-green-700 dark:text-green-400 mt-1">{selectedPlayer.role}</div>
                   </div>
                 )}
 
-                <div>
-                  <Label className="text-gray-700 dark:text-slate-300 mb-2">Innings Window</Label>
-                  <Select value={inningsWindow} onValueChange={setInningsWindow}>
-                    <SelectTrigger className="bg-gray-50 dark:bg-slate-900/50 border-gray-300 dark:border-slate-600 text-gray-900 dark:text-white">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="5">Last 5 innings</SelectItem>
-                      <SelectItem value="10">Last 10 innings</SelectItem>
-                      <SelectItem value="15">Last 15 innings</SelectItem>
-                      <SelectItem value="20">Last 20 innings</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                <div>
-                  <Label className="text-gray-700 dark:text-slate-300 mb-2">Match Format</Label>
-                  <Select value={matchFormat} onValueChange={setMatchFormat}>
-                    <SelectTrigger className="bg-gray-50 dark:bg-slate-900/50 border-gray-300 dark:border-slate-600 text-gray-900 dark:text-white">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">All Formats</SelectItem>
-                      <SelectItem value="t20">T20</SelectItem>
-                      <SelectItem value="odi">ODI</SelectItem>
-                      <SelectItem value="test">Test</SelectItem>
-                    </SelectContent>
-                  </Select>
+                <div className="rounded-lg border border-gray-200 dark:border-slate-700 bg-gray-50 dark:bg-slate-900/40 p-4">
+                  <Label className="text-gray-700 dark:text-slate-300 mb-2 block">Metric Definition</Label>
+                  <p className="text-sm text-gray-600 dark:text-slate-400">
+                    Rolling Impact uses the last 10 innings with weights from 0.1 to 1.0, then normalizes to a 0-100 scale with 50 as the neutral baseline.
+                  </p>
                 </div>
 
                 <Button
@@ -172,7 +156,7 @@ export function PlayerImpactAnalyzer({ onBack }: PlayerImpactAnalyzerProps) {
                   size="lg"
                 >
                   {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : <BarChart3 className="w-4 h-4 mr-2" />}
-                  {loading ? 'Analyzing...' : 'Analyze Impact'}
+                  {loading ? 'Analyzing...' : 'Load Impact Metric'}
                 </Button>
               </div>
             </Card>
@@ -182,15 +166,15 @@ export function PlayerImpactAnalyzer({ onBack }: PlayerImpactAnalyzerProps) {
             {!showResults ? (
               <Card className="bg-white/50 dark:bg-slate-800/80 border-gray-200 dark:border-slate-700 p-12 shadow-md dark:shadow-2xl flex flex-col items-center justify-center min-h-[600px]">
                 <Activity className="w-16 h-16 text-gray-300 dark:text-slate-600 mb-4" />
-                <h3 className="text-xl text-gray-600 dark:text-slate-400 mb-2">No Analysis Yet</h3>
+                <h3 className="text-xl text-gray-600 dark:text-slate-400 mb-2">No Player Selected</h3>
                 <p className="text-gray-500 dark:text-slate-500 text-center max-w-md">
-                  Select a player and configure the analysis parameters, then click "Analyze Impact" to generate comprehensive metrics
+                  Search for a player, then load the rolling impact metric, innings trend, and context breakdown.
                 </p>
               </Card>
             ) : loading ? (
               <Card className="bg-white/50 dark:bg-slate-800/80 border-gray-200 dark:border-slate-700 p-12 flex flex-col items-center justify-center min-h-[600px]">
                 <Loader2 className="w-16 h-16 text-green-500 animate-spin mb-4" />
-                <h3 className="text-xl text-gray-600 dark:text-slate-400">Running ML Models...</h3>
+                <h3 className="text-xl text-gray-600 dark:text-slate-400">Calculating impact metric...</h3>
               </Card>
             ) : analysisResult ? (
               <div className="space-y-6">
@@ -199,16 +183,20 @@ export function PlayerImpactAnalyzer({ onBack }: PlayerImpactAnalyzerProps) {
                     <div className="flex-1">
                       <h2 className="text-2xl text-gray-900 dark:text-white mb-2">Rolling Impact Metric</h2>
                       <p className="text-gray-600 dark:text-slate-400 mb-4">
-                        Weighted average over last {inningsWindow} innings with recency bias
+                        {analysisResult.player_name} over the last 10 innings with recency weighting and neutral baseline normalization
                       </p>
                       <div className="space-y-2">
-                        <div className="flex items-center gap-2"><div className="w-3 h-3 rounded-full bg-green-600"></div><span className="text-sm">≥ 70: Elite Impact</span></div>
-                        <div className="flex items-center gap-2"><div className="w-3 h-3 rounded-full bg-emerald-600"></div><span className="text-sm">50-70: High Impact</span></div>
-                        <div className="flex items-center gap-2"><div className="w-3 h-3 rounded-full bg-amber-500"></div><span className="text-sm">30-50: Neutral Impact</span></div>
-                        <div className="flex items-center gap-2"><div className="w-3 h-3 rounded-full bg-red-500"></div><span className="text-sm">&lt; 30: Low Impact</span></div>
+                        <div className="flex items-center gap-2"><div className="w-3 h-3 rounded-full bg-red-500"></div><span className="text-sm">0-30: Low Impact</span></div>
+                        <div className="flex items-center gap-2"><div className="w-3 h-3 rounded-full bg-amber-500"></div><span className="text-sm">30-50: Below Average</span></div>
+                        <div className="flex items-center gap-2"><div className="w-3 h-3 rounded-full bg-yellow-500"></div><span className="text-sm">50: Neutral Baseline</span></div>
+                        <div className="flex items-center gap-2"><div className="w-3 h-3 rounded-full bg-emerald-600"></div><span className="text-sm">50-70: Positive Impact</span></div>
+                        <div className="flex items-center gap-2"><div className="w-3 h-3 rounded-full bg-green-700"></div><span className="text-sm">70-100: High to Match-Winning Impact</span></div>
+                      </div>
+                      <div className="mt-4 text-sm text-gray-500 dark:text-slate-400">
+                        Rolling raw score: {analysisResult.rolling_impact.toFixed(2)} • Trend: {analysisResult.trend}
                       </div>
                     </div>
-                    <ImpactMeter score={analysisResult.rollingImpactScore} size="lg" />
+                    <ImpactMeter score={analysisResult.impact_metric} size="lg" />
                   </div>
                 </Card>
 
@@ -230,7 +218,7 @@ export function PlayerImpactAnalyzer({ onBack }: PlayerImpactAnalyzerProps) {
                 </Card>
 
                 <Card className="bg-white dark:bg-slate-800 border-gray-200 dark:border-slate-700 p-6 shadow-lg dark:shadow-2xl">
-                  <h3 className="text-xl text-gray-900 dark:text-white mb-4">Impact Contribution Breakdown</h3>
+                  <h3 className="text-xl text-gray-900 dark:text-white mb-4">Context Breakdown</h3>
                   <div className="bg-gray-50 dark:bg-slate-900/50 rounded-lg p-4">
                     <ResponsiveContainer width="100%" height={300}>
                       <BarChart data={breakdownData}>
@@ -252,38 +240,23 @@ export function PlayerImpactAnalyzer({ onBack }: PlayerImpactAnalyzerProps) {
                   <div className="flex items-start gap-3 mb-4">
                     <AlertCircle className="w-5 h-5 text-green-600 dark:text-green-400 mt-0.5" />
                     <div>
-                      <h3 className="text-xl text-gray-900 dark:text-white mb-2">Impact Analysis Explanation</h3>
-                      <p className="text-gray-600 dark:text-slate-400 text-sm">Confidence: {analysisResult.confidenceScore.toFixed(0)}%</p>
+                      <h3 className="text-xl text-gray-900 dark:text-white mb-2">Explanation Panel</h3>
+                      <p className="text-gray-600 dark:text-slate-400 text-sm">
+                        Last updated: {analysisResult.last_updated ? new Date(analysisResult.last_updated).toLocaleString() : 'Unavailable'}
+                      </p>
                     </div>
                   </div>
-
-                  {analysisResult.warnings?.map((w, idx) => (
-                    <div key={idx} className="mb-2 p-2 bg-amber-500/10 text-amber-600 text-sm rounded">{w}</div>
-                  ))}
-
-                  <div className="mt-4 p-4 bg-gray-100 dark:bg-slate-700/30 rounded-lg">
-                    <h4 className="text-gray-900 dark:text-white mb-2 flex items-center gap-2 font-medium">
-                      <TrendingUp className="w-4 h-4 text-green-600 dark:text-green-400" /> Key Positive Drivers
-                    </h4>
-                    <ul className="space-y-1 text-sm text-gray-700 dark:text-slate-300">
-                      {analysisResult.explainability.positiveDrivers.length > 0 ? (
-                        analysisResult.explainability.positiveDrivers.map((d, i) => <li key={i}>• {d}</li>)
-                      ) : <li>• Neutral or not enough impact</li>}
-                    </ul>
-                  </div>
-
-                  <div className="mt-4 p-4 bg-gray-100 dark:bg-slate-700/30 rounded-lg">
-                    <h4 className="text-gray-900 dark:text-white mb-2 flex items-center gap-2 font-medium">
-                      <TrendingUp className="w-4 h-4 text-red-600 dark:text-red-400 rotate-180" /> Risk Factors / Negatives
-                    </h4>
-                    <ul className="space-y-1 text-sm text-gray-700 dark:text-slate-300">
-                      {analysisResult.explainability.negativeDrivers.length > 0 ? (
-                        analysisResult.explainability.negativeDrivers.map((d, i) => <li key={i}>• {d}</li>)
-                      ) : <li>• No major risks found</li>}
-                    </ul>
+                  <div className="mt-4 p-4 bg-gray-100 dark:bg-slate-700/30 rounded-lg text-sm text-gray-700 dark:text-slate-300 leading-7">
+                    {analysisResult.explanation}
                   </div>
                 </Card>
               </div>
+            ) : error ? (
+              <Card className="bg-white/50 dark:bg-slate-800/80 border-gray-200 dark:border-slate-700 p-12 flex flex-col items-center justify-center min-h-[600px]">
+                <AlertCircle className="w-16 h-16 text-red-500 mb-4" />
+                <h3 className="text-xl text-gray-600 dark:text-slate-400 mb-2">Unable to load player impact</h3>
+                <p className="text-gray-500 dark:text-slate-500 text-center max-w-md">{error}</p>
+              </Card>
             ) : null}
           </motion.div>
         </div>

@@ -18,16 +18,19 @@ export function ImpactMeter({ score, size = 'md' }: ImpactMeterProps) {
   const offset = circumference - (score / 100) * circumference;
   
   const getColor = (score: number) => {
-    if (score >= 70) return '#16a34a'; // green-600
-    if (score >= 50) return '#059669'; // emerald-600
-    if (score >= 30) return '#f59e0b'; // orange
+    if (score >= 90) return '#166534';
+    if (score >= 70) return '#16a34a';
+    if (score >= 50) return '#eab308';
+    if (score >= 30) return '#f59e0b';
     return '#ef4444'; // red
   };
   
   const getTier = (score: number) => {
-    if (score >= 75) return 'Elite';
-    if (score >= 60) return 'High';
-    if (score >= 40) return 'Neutral';
+    if (score >= 90) return 'Match Winning';
+    if (score >= 70) return 'High';
+    if (score > 50) return 'Positive';
+    if (score === 50) return 'Neutral';
+    if (score >= 30) return 'Below Average';
     return 'Low';
   };
   
